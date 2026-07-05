@@ -1,0 +1,187 @@
+using System.Text;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using PRN232.ExamAccount.Application.Messaging;
+using PRN232.ExamAccount.Domain.Entities;
+using PRN232.ExamAccount.Domain.Enums;
+using PRN232.ExamAccount.Infrastructure.Persistence;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+
+namespace PRN232.ExamAccount.Infrastructure.Messaging;
+
+public class GradingResultConsumer : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RabbitMqOptions _options;
+    private readonly ILogger<GradingResultConsumer> _logger;
+    private IConnection? _connection;
+    private IModel? _channel;
+
+    public GradingResultConsumer(
+        IServiceScopeFactory scopeFactory,
+        IOptions<RabbitMqOptions> options,
+        ILogger<GradingResultConsumer> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _options.HostName,
+            Port = _options.Port,
+            UserName = _options.UserName,
+            Password = _options.Password
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+
+        _channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Direct, durable: true);
+        _channel.QueueDeclare(_options.GradingResultsQueue, durable: true, exclusive: false, autoDelete: false);
+        _channel.QueueBind(_options.GradingResultsQueue, _options.ExchangeName, _options.ResultRoutingKey);
+
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+        consumer.Received += OnMessageReceivedAsync;
+
+        _channel.BasicConsume(_options.GradingResultsQueue, autoAck: false, consumer);
+        return Task.CompletedTask;
+    }
+
+    private async Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs eventArgs)
+    {
+        if (_channel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+            var message = JsonSerializer.Deserialize<SubmissionGradedEvent>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (message is null)
+            {
+                throw new InvalidOperationException("Không deserialize được SubmissionGradedEvent.");
+            }
+
+            await ProcessMessageAsync(message, CancellationToken.None);
+            _channel.BasicAck(eventArgs.DeliveryTag, multiple: false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to process grading result message.");
+            _channel.BasicNack(eventArgs.DeliveryTag, multiple: false, requeue: true);
+        }
+    }
+
+    protected internal Task InvokeProcessAsync(SubmissionGradedEvent message, CancellationToken cancellationToken = default)
+    {
+        return ProcessMessageAsync(message, cancellationToken);
+    }
+
+    private async Task ProcessMessageAsync(SubmissionGradedEvent message, CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ExamAccountDbContext>();
+
+        var submission = await dbContext.Submissions
+            .Include(x => x.SectionResults)
+            .FirstOrDefaultAsync(x => x.Id == message.SubmissionId, cancellationToken);
+
+        if (submission is null)
+        {
+            throw new InvalidOperationException($"Không tìm thấy submission {message.SubmissionId} để cập nhật kết quả.");
+        }
+
+        submission.TotalScore = message.TotalScore;
+        submission.RawJsonReport = message.RawJsonReport;
+        submission.GradedAtUtc = message.CompletedAtUtc;
+        submission.Status = SubmissionStatus.GradedPendingPublication;
+
+        if (submission.SectionResults.Count > 0)
+        {
+            dbContext.SubmissionSectionResults.RemoveRange(submission.SectionResults);
+        }
+
+        foreach (var item in ParseSectionResults(message.SubmissionId, message.RawJsonReport))
+        {
+            submission.SectionResults.Add(item);
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private static IEnumerable<SubmissionSectionResult> ParseSectionResults(Guid submissionId, string rawJsonReport)
+    {
+        if (string.IsNullOrWhiteSpace(rawJsonReport))
+        {
+            return [];
+        }
+
+        using var document = JsonDocument.Parse(rawJsonReport);
+        if (!document.RootElement.TryGetProperty("sectionResults", out var sectionResultsElement) ||
+            sectionResultsElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var results = new List<SubmissionSectionResult>();
+
+        foreach (var element in sectionResultsElement.EnumerateArray())
+        {
+            results.Add(new SubmissionSectionResult
+            {
+                Id = Guid.NewGuid(),
+                SubmissionId = submissionId,
+                SectionName = GetString(element, "name"),
+                Score = GetDecimal(element, "score"),
+                MaxScore = GetDecimal(element, "maxScore"),
+                Status = GetString(element, "status"),
+                Feedback = GetString(element, "feedback")
+            });
+        }
+
+        return results;
+    }
+
+    private static string GetString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static decimal GetDecimal(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return 0m;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetDecimal(out var value) => value,
+            JsonValueKind.String when decimal.TryParse(property.GetString(), out var value) => value,
+            _ => 0m
+        };
+    }
+
+    public override void Dispose()
+    {
+        _channel?.Dispose();
+        _connection?.Dispose();
+        base.Dispose();
+    }
+}

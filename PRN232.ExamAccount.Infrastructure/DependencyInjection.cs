@@ -1,5 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using PRN232.ExamAccount.Application.Interfaces;
+using PRN232.ExamAccount.Infrastructure.Messaging;
+using PRN232.ExamAccount.Infrastructure.Persistence;
 
 namespace PRN232.ExamAccount.Infrastructure;
 
@@ -9,7 +13,13 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // Register infrastructure services (e.g. DbContext, Repositories) here
+        services.Configure<RabbitMqOptions>(options =>
+            configuration.GetSection(RabbitMqOptions.SectionName).Bind(options));
+        services.AddDbContext<ExamAccountDbContext>(options =>
+            options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
+        services.AddScoped<IGradingJobPublisher, RabbitMqJobPublisher>();
+        services.AddHostedService<GradingResultConsumer>();
+
         return services;
     }
 }
