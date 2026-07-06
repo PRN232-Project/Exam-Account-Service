@@ -32,14 +32,16 @@ public class GradingResultConsumer : BackgroundService
         _logger = logger;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var factory = new ConnectionFactory
         {
             HostName = _options.HostName,
             Port = _options.Port,
             UserName = _options.UserName,
-            Password = _options.Password
+            Password = _options.Password,
+            DispatchConsumersAsync = true,
+            AutomaticRecoveryEnabled = true
         };
 
         _connection = factory.CreateConnection();
@@ -53,7 +55,7 @@ public class GradingResultConsumer : BackgroundService
         consumer.Received += OnMessageReceivedAsync;
 
         _channel.BasicConsume(_options.GradingResultsQueue, autoAck: false, consumer);
-        return Task.CompletedTask;
+        await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
     private async Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs eventArgs)
@@ -66,6 +68,8 @@ public class GradingResultConsumer : BackgroundService
         try
         {
             var json = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+            _logger.LogInformation("Received grading result payload: {Payload}", json);
+
             var message = JsonSerializer.Deserialize<SubmissionGradedEvent>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
@@ -78,6 +82,7 @@ public class GradingResultConsumer : BackgroundService
 
             await ProcessMessageAsync(message, CancellationToken.None);
             _channel.BasicAck(eventArgs.DeliveryTag, multiple: false);
+            _logger.LogInformation("Processed grading result for submission {SubmissionId}.", message.SubmissionId);
         }
         catch (Exception ex)
         {
@@ -95,9 +100,9 @@ public class GradingResultConsumer : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ExamAccountDbContext>();
+        _logger.LogInformation("Loading submission {SubmissionId} for grading result sync.", message.SubmissionId);
 
         var submission = await dbContext.Submissions
-            .Include(x => x.SectionResults)
             .FirstOrDefaultAsync(x => x.Id == message.SubmissionId, cancellationToken);
 
         if (submission is null)
@@ -105,22 +110,37 @@ public class GradingResultConsumer : BackgroundService
             throw new InvalidOperationException($"Không tìm thấy submission {message.SubmissionId} để cập nhật kết quả.");
         }
 
+        _logger.LogInformation("Loaded submission {SubmissionId} with current status {Status}.", submission.Id, submission.Status);
+
         submission.TotalScore = message.TotalScore;
         submission.RawJsonReport = message.RawJsonReport;
         submission.GradedAtUtc = message.CompletedAtUtc;
         submission.Status = SubmissionStatus.GradedPendingPublication;
 
-        if (submission.SectionResults.Count > 0)
+        var existingSectionResults = await dbContext.SubmissionSectionResults
+            .Where(x => x.SubmissionId == message.SubmissionId)
+            .ToListAsync(cancellationToken);
+
+        if (existingSectionResults.Count > 0)
         {
-            dbContext.SubmissionSectionResults.RemoveRange(submission.SectionResults);
+            dbContext.SubmissionSectionResults.RemoveRange(existingSectionResults);
         }
 
-        foreach (var item in ParseSectionResults(message.SubmissionId, message.RawJsonReport))
+        var parsedSectionResults = ParseSectionResults(message.SubmissionId, message.RawJsonReport).ToList();
+        _logger.LogInformation(
+            "Replacing {ExistingCount} section results with {NewCount} parsed items for submission {SubmissionId}.",
+            existingSectionResults.Count,
+            parsedSectionResults.Count,
+            message.SubmissionId);
+
+        if (parsedSectionResults.Count > 0)
         {
-            submission.SectionResults.Add(item);
+            await dbContext.SubmissionSectionResults.AddRangeAsync(parsedSectionResults, cancellationToken);
         }
 
+        _logger.LogInformation("Saving grading result changes for submission {SubmissionId}.", message.SubmissionId);
         await dbContext.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Saved grading result changes for submission {SubmissionId}.", message.SubmissionId);
     }
 
     private static IEnumerable<SubmissionSectionResult> ParseSectionResults(Guid submissionId, string rawJsonReport)

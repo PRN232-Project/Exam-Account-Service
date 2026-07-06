@@ -7,47 +7,58 @@ namespace PRN232.ExamAccount.Api.GraphQL.Queries;
 
 public class ExamQuery
 {
+    [GraphQLName("examDashboard")]
     public async Task<ExamDashboardDto?> GetExamDashboardAsync(
         Guid examId,
         [Service] ExamAccountDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        return await dbContext.Exams
+        var exam = await dbContext.Exams
             .AsNoTracking()
-            .Where(x => x.Id == examId)
-            .Select(x => new ExamDashboardDto
-            {
-                ExamId = x.Id,
-                ExamCode = x.Code,
-                ExamTitle = x.Title,
-                MaxScore = x.MaxScore,
-                CandidateCount = x.Submissions.Count,
-                Candidates = x.Submissions
-                    .OrderByDescending(s => s.SubmittedAtUtc)
-                    .Select(s => new CandidateDashboardDto
-                    {
-                        SubmissionId = s.Id,
-                        StudentId = s.StudentAccountId,
-                        StudentCode = s.StudentAccount!.StudentCode,
-                        StudentName = s.StudentAccount!.FullName,
-                        Status = s.Status.ToString(),
-                        TotalScore = s.TotalScore,
-                        SubmittedAtUtc = s.SubmittedAtUtc,
-                        GradedAtUtc = s.GradedAtUtc,
-                        SectionResults = s.SectionResults
-                            .OrderBy(r => r.SectionName)
-                            .Select(r => new SectionScoreDto
-                            {
-                                SectionName = r.SectionName,
-                                Score = r.Score,
-                                MaxScore = r.MaxScore,
-                                Status = r.Status,
-                                Feedback = r.Feedback
-                            })
-                            .ToList()
-                    })
-                    .ToList()
-            })
-            .FirstOrDefaultAsync(cancellationToken);
+            .AsSplitQuery()
+            .Include(x => x.Submissions)
+                .ThenInclude(x => x.StudentAccount)
+            .Include(x => x.Submissions)
+                .ThenInclude(x => x.SectionResults)
+            .FirstOrDefaultAsync(x => x.Id == examId, cancellationToken);
+
+        if (exam is null)
+        {
+            return null;
+        }
+
+        return new ExamDashboardDto
+        {
+            ExamId = exam.Id,
+            ExamCode = exam.Code,
+            ExamTitle = exam.Title,
+            MaxScore = exam.MaxScore,
+            CandidateCount = exam.Submissions.Count,
+            Candidates = exam.Submissions
+                .OrderByDescending(s => s.SubmittedAtUtc)
+                .Select(s => new CandidateDashboardDto
+                {
+                    SubmissionId = s.Id,
+                    StudentId = s.StudentAccountId,
+                    StudentCode = s.StudentAccount?.StudentCode ?? string.Empty,
+                    StudentName = s.StudentAccount?.FullName ?? string.Empty,
+                    Status = s.Status.ToString(),
+                    TotalScore = s.TotalScore,
+                    SubmittedAtUtc = s.SubmittedAtUtc,
+                    GradedAtUtc = s.GradedAtUtc,
+                    SectionResults = s.SectionResults
+                        .OrderBy(r => r.SectionName)
+                        .Select(r => new SectionScoreDto
+                        {
+                            SectionName = r.SectionName,
+                            Score = r.Score,
+                            MaxScore = r.MaxScore,
+                            Status = r.Status,
+                            Feedback = r.Feedback
+                        })
+                        .ToList()
+                })
+                .ToList()
+        };
     }
 }

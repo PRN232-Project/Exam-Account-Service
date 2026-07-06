@@ -4,6 +4,12 @@ namespace PRN232.ExamAccount.Tests;
 
 public class MessagingContractTests
 {
+    private const string ForbiddenKeywordOne = "SELECT *";
+    private const string ForbiddenKeywordTwo = "DROP TABLE";
+    private const string SectionName = "CRUD";
+    private const decimal SectionWeight = 30m;
+    private const string SectionFilter = "Category=CRUD";
+
     [Fact]
     public void GradingJobMessage_CanCarryPlagiarismConfigAndSections()
     {
@@ -12,14 +18,14 @@ public class MessagingContractTests
             SubmissionId = Guid.NewGuid(),
             ExamConfig = new ExamConfigurationMessage
             {
-                PlagiarismConfig = ["SELECT *", "DROP TABLE"],
+                PlagiarismConfig = [ForbiddenKeywordOne, ForbiddenKeywordTwo],
                 Sections =
                 [
                     new SectionConfigurationMessage
                     {
-                        Name = "CRUD",
-                        Weight = 30,
-                        TestFilter = "Category=CRUD"
+                        Name = SectionName,
+                        Weight = SectionWeight,
+                        TestFilter = SectionFilter
                     }
                 ]
             }
@@ -27,6 +33,6 @@ public class MessagingContractTests
 
         Assert.Equal(2, message.ExamConfig.PlagiarismConfig.Length);
         Assert.Single(message.ExamConfig.Sections);
-        Assert.Equal("CRUD", message.ExamConfig.Sections[0].Name);
+        Assert.Equal(SectionName, message.ExamConfig.Sections[0].Name);
     }
 }

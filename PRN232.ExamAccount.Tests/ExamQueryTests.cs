@@ -8,6 +8,20 @@ namespace PRN232.ExamAccount.Tests;
 
 public class ExamQueryTests
 {
+    private const string ExamCode = "PRN232-SU26";
+    private const string ExamTitle = "PRN232 Final";
+    private const string SolutionPattern = "*.sln";
+    private const string SectionName = "CRUD";
+    private const string SectionFilter = "Category=CRUD";
+    private const decimal SectionWeight = 30m;
+    private const string WorkspacePath = "workspace";
+    private const string StudentCode = "SE0001";
+    private const string StudentName = "Nguyen Van A";
+    private const decimal TotalScore = 8m;
+    private const decimal SectionScore = 3m;
+    private const decimal SectionMaxScore = 4m;
+    private const string SectionStatus = "Passed";
+
     [Fact]
     public async Task GetExamDashboardAsync_ReturnsNestedCandidateTree()
     {
@@ -23,12 +37,18 @@ public class ExamQueryTests
         dbContext.Exams.Add(new Exam
         {
             Id = examId,
-            Code = "PRN232-SU26",
-            Title = "PRN232 Final",
-            SolutionPattern = "*.sln",
+            Code = ExamCode,
+            Title = ExamTitle,
+            SolutionPattern = SolutionPattern,
             Sections =
             [
-                new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "CRUD", TestFilter = "Category=CRUD", Weight = 30 }
+                new ExamSectionDefinition
+                {
+                    Id = Guid.NewGuid(),
+                    Name = SectionName,
+                    TestFilter = SectionFilter,
+                    Weight = SectionWeight
+                }
             ],
             Submissions =
             [
@@ -36,24 +56,24 @@ public class ExamQueryTests
                 {
                     Id = submissionId,
                     StudentAccountId = studentId,
-                    WorkspacePath = "workspace",
+                    WorkspacePath = WorkspacePath,
                     Status = SubmissionStatus.GradedPendingPublication,
-                    TotalScore = 8m,
+                    TotalScore = TotalScore,
                     StudentAccount = new StudentAccount
                     {
                         Id = studentId,
-                        StudentCode = "SE0001",
-                        FullName = "Nguyen Van A"
+                        StudentCode = StudentCode,
+                        FullName = StudentName
                     },
                     SectionResults =
                     [
                         new SubmissionSectionResult
                         {
                             Id = Guid.NewGuid(),
-                            SectionName = "CRUD",
-                            Score = 3m,
-                            MaxScore = 4m,
-                            Status = "Passed"
+                            SectionName = SectionName,
+                            Score = SectionScore,
+                            MaxScore = SectionMaxScore,
+                            Status = SectionStatus
                         }
                     ]
                 }
@@ -68,7 +88,7 @@ public class ExamQueryTests
         Assert.NotNull(result);
         Assert.Equal(examId, result!.ExamId);
         Assert.Single(result.Candidates);
-        Assert.Equal("SE0001", result.Candidates[0].StudentCode);
+        Assert.Equal(StudentCode, result.Candidates[0].StudentCode);
         Assert.Single(result.Candidates[0].SectionResults);
     }
 }

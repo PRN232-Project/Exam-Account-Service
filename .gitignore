@@ -38,6 +38,7 @@ ScaffoldingReadMe.txt
 
 # dotenv environment variables file
 .env
+.env.local
 
 # Others
 ~$*
@@ -55,3 +56,13 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Local machine overrides
+**/appsettings.Local.json
+**/appsettings.*.local.json
+
+# Personal notes / local test docs
+/RUN-NOW.md
+/TASK-COMPLETION-NOTE.md
+/TEST-CHECKLIST.md
+/seed-sample-data.sql
