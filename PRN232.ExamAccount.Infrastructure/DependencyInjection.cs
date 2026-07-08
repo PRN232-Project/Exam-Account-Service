@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using PRN232.ExamAccount.Application.Dashboard;
 using PRN232.ExamAccount.Application.Interfaces;
+using PRN232.ExamAccount.Infrastructure.Dashboard;
 using PRN232.ExamAccount.Infrastructure.Messaging;
 using PRN232.ExamAccount.Infrastructure.Persistence;
 
@@ -17,6 +19,7 @@ public static class DependencyInjection
             configuration.GetSection(RabbitMqOptions.SectionName).Bind(options));
         services.AddDbContext<ExamAccountDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
+        services.AddScoped<IExamDashboardReader, ExamDashboardReader>();
         services.AddScoped<IGradingJobPublisher, RabbitMqJobPublisher>();
         services.AddHostedService<GradingResultConsumer>();
 
