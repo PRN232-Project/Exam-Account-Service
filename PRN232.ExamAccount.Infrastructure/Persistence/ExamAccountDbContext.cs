@@ -18,6 +18,7 @@ public class ExamAccountDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.HasDefaultSchema("exam");
 
         modelBuilder.Entity<Exam>(entity =>
         {

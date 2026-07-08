@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using PRN232.ExamAccount.Api.GraphQL.Queries;
 using PRN232.ExamAccount.Application;
 using PRN232.ExamAccount.Infrastructure;
@@ -22,7 +23,56 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ExamAccountDbContext>();
-    dbContext.Database.EnsureCreated();
+    dbContext.Database.ExecuteSqlRaw("CREATE SCHEMA IF NOT EXISTS exam;");
+    
+    var databaseCreator = dbContext.Database.GetService<Microsoft.EntityFrameworkCore.Storage.IDatabaseCreator>() 
+        as Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator;
+    if (databaseCreator != null)
+    {
+        var tableExists = false;
+        try
+        {
+            var connection = dbContext.Database.GetDbConnection();
+            var wasOpen = connection.State == System.Data.ConnectionState.Open;
+            if (!wasOpen) connection.Open();
+            try
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'exam' AND tablename = 'Exams');";
+                    tableExists = (bool)(cmd.ExecuteScalar() ?? false);
+                }
+            }
+            finally
+            {
+                if (!wasOpen) connection.Close();
+            }
+        }
+        catch (System.Exception ex)
+        {
+            System.Console.WriteLine($"[DB Check Error] {ex.Message}");
+        }
+
+        if (!tableExists)
+        {
+            try
+            {
+                databaseCreator.CreateTables();
+                System.Console.WriteLine("Database tables created successfully in exam schema.");
+            }
+            catch (System.Exception ex)
+            {
+                System.Console.WriteLine("==================================================");
+                System.Console.WriteLine("DB CREATION ERROR IN EXAM SERVICE:");
+                System.Console.WriteLine(ex.ToString());
+                System.Console.WriteLine("==================================================");
+            }
+        }
+        else
+        {
+            System.Console.WriteLine("Database tables already exist in exam schema. Skipping creation.");
+        }
+    }
 }
 
 app.UseSwagger();
