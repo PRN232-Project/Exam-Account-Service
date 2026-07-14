@@ -11,6 +11,7 @@ public class Submission
     public SubmissionStatus Status { get; set; } = SubmissionStatus.Submitted;
     public decimal? TotalScore { get; set; }
     public string RawJsonReport { get; set; } = string.Empty;
+    public string ErrorMessage { get; set; } = string.Empty;
     public DateTime SubmittedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime? GradedAtUtc { get; set; }
 

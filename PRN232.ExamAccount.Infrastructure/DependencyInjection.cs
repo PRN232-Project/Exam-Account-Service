@@ -17,10 +17,13 @@ public static class DependencyInjection
     {
         services.Configure<RabbitMqOptions>(options =>
             configuration.GetSection(RabbitMqOptions.SectionName).Bind(options));
+        services.Configure<NotificationGrpcOptions>(options =>
+            configuration.GetSection(NotificationGrpcOptions.SectionName).Bind(options));
         services.AddDbContext<ExamAccountDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
         services.AddScoped<IExamDashboardReader, ExamDashboardReader>();
         services.AddScoped<IGradingJobPublisher, RabbitMqJobPublisher>();
+        services.AddSingleton<NotificationGrpcClient>();
         services.AddHostedService<GradingResultConsumer>();
 
         return services;

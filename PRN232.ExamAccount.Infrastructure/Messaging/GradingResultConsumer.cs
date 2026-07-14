@@ -18,6 +18,7 @@ public class GradingResultConsumer : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RabbitMqOptions _options;
+    private readonly NotificationGrpcClient _notificationGrpcClient;
     private readonly ILogger<GradingResultConsumer> _logger;
     private IConnection? _connection;
     private IModel? _channel;
@@ -25,10 +26,12 @@ public class GradingResultConsumer : BackgroundService
     public GradingResultConsumer(
         IServiceScopeFactory scopeFactory,
         IOptions<RabbitMqOptions> options,
+        NotificationGrpcClient notificationGrpcClient,
         ILogger<GradingResultConsumer> logger)
     {
         _scopeFactory = scopeFactory;
         _options = options.Value;
+        _notificationGrpcClient = notificationGrpcClient;
         _logger = logger;
     }
 
@@ -44,18 +47,38 @@ public class GradingResultConsumer : BackgroundService
             AutomaticRecoveryEnabled = true
         };
 
-        _connection = factory.CreateConnection();
-        _channel = _connection.CreateModel();
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                _connection ??= factory.CreateConnection();
+                _channel ??= _connection.CreateModel();
 
-        _channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Direct, durable: true);
-        _channel.QueueDeclare(_options.GradingResultsQueue, durable: true, exclusive: false, autoDelete: false);
-        _channel.QueueBind(_options.GradingResultsQueue, _options.ExchangeName, _options.ResultRoutingKey);
+                _channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Direct, durable: true);
+                _channel.QueueDeclare(_options.GradingResultsQueue, durable: true, exclusive: false, autoDelete: false);
+                _channel.QueueBind(_options.GradingResultsQueue, _options.ExchangeName, _options.ResultRoutingKey);
 
-        var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.Received += OnMessageReceivedAsync;
+                var consumer = new AsyncEventingBasicConsumer(_channel);
+                consumer.Received += OnMessageReceivedAsync;
 
-        _channel.BasicConsume(_options.GradingResultsQueue, autoAck: false, consumer);
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+                _channel.BasicConsume(_options.GradingResultsQueue, autoAck: false, consumer);
+                _logger.LogInformation("GradingResultConsumer connected to RabbitMQ and started consuming.");
+                await Task.Delay(Timeout.Infinite, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Cannot connect to RabbitMQ yet. Retrying in 5 seconds.");
+                _channel?.Dispose();
+                _connection?.Dispose();
+                _channel = null;
+                _connection = null;
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
     }
 
     private async Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs eventArgs)
@@ -103,6 +126,8 @@ public class GradingResultConsumer : BackgroundService
         _logger.LogInformation("Loading submission {SubmissionId} for grading result sync.", message.SubmissionId);
 
         var submission = await dbContext.Submissions
+            .Include(x => x.Exam)
+                .ThenInclude(x => x!.Room)
             .FirstOrDefaultAsync(x => x.Id == message.SubmissionId, cancellationToken);
 
         if (submission is null)
@@ -114,8 +139,11 @@ public class GradingResultConsumer : BackgroundService
 
         submission.TotalScore = message.TotalScore;
         submission.RawJsonReport = message.RawJsonReport;
+        submission.ErrorMessage = message.ErrorMessage;
         submission.GradedAtUtc = message.CompletedAtUtc;
-        submission.Status = SubmissionStatus.GradedPendingPublication;
+        submission.Status = message.HasErrors
+            ? SubmissionStatus.Failed
+            : SubmissionStatus.GradedPendingPublication;
 
         var existingSectionResults = await dbContext.SubmissionSectionResults
             .Where(x => x.SubmissionId == message.SubmissionId)
@@ -136,6 +164,38 @@ public class GradingResultConsumer : BackgroundService
         if (parsedSectionResults.Count > 0)
         {
             await dbContext.SubmissionSectionResults.AddRangeAsync(parsedSectionResults, cancellationToken);
+        }
+
+        if (message.HasErrors && submission.Exam?.Room is not null)
+        {
+            var lecturerId = submission.Exam.Room.LecturerId;
+            var notification = new NotificationRecord
+            {
+                Id = Guid.NewGuid(),
+                RecipientUserId = lecturerId,
+                SubmissionId = submission.Id,
+                ExamId = submission.ExamId,
+                RoomId = submission.Exam.RoomId,
+                Type = "GradingFailed",
+                Title = $"Submission {message.StudentCode} grading failed",
+                Message = string.IsNullOrWhiteSpace(message.ErrorMessage)
+                    ? "Bai thi gap loi trong qua trinh cham."
+                    : message.ErrorMessage,
+                IsRead = false,
+                CreatedAtUtc = DateTime.UtcNow
+            };
+
+            await dbContext.Notifications.AddAsync(notification, cancellationToken);
+
+            await _notificationGrpcClient.SendNotificationAsync(
+                lecturerId,
+                submission.Exam.RoomId,
+                submission.ExamId,
+                submission.Id,
+                notification.Type,
+                notification.Title,
+                notification.Message,
+                cancellationToken);
         }
 
         _logger.LogInformation("Saving grading result changes for submission {SubmissionId}.", message.SubmissionId);

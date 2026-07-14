@@ -1,7 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using PRN232.ExamAccount.Api.Controllers;
 using PRN232.ExamAccount.Api.GraphQL.Queries;
 using PRN232.ExamAccount.Application;
+using PRN232.ExamAccount.Domain.Entities;
+using PRN232.ExamAccount.Domain.Enums;
 using PRN232.ExamAccount.Infrastructure;
 using PRN232.ExamAccount.Infrastructure.Persistence;
 
@@ -22,56 +25,8 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ExamAccountDbContext>();
-    dbContext.Database.ExecuteSqlRaw("CREATE SCHEMA IF NOT EXISTS exam;");
-    
-    var databaseCreator = dbContext.Database.GetService<Microsoft.EntityFrameworkCore.Storage.IDatabaseCreator>() 
-        as Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator;
-    if (databaseCreator != null)
-    {
-        var tableExists = false;
-        try
-        {
-            var connection = dbContext.Database.GetDbConnection();
-            var wasOpen = connection.State == System.Data.ConnectionState.Open;
-            if (!wasOpen) connection.Open();
-            try
-            {
-                using (var cmd = connection.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'exam' AND tablename = 'Exams');";
-                    tableExists = (bool)(cmd.ExecuteScalar() ?? false);
-                }
-            }
-            finally
-            {
-                if (!wasOpen) connection.Close();
-            }
-        }
-        catch (System.Exception ex)
-        {
-            System.Console.WriteLine($"[DB Check Error] {ex.Message}");
-        }
-
-        if (!tableExists)
-        {
-            try
-            {
-                databaseCreator.CreateTables();
-                System.Console.WriteLine("Database tables created successfully in exam schema.");
-            }
-            catch (System.Exception ex)
-            {
-                System.Console.WriteLine("==================================================");
-                System.Console.WriteLine("DB CREATION ERROR IN EXAM SERVICE:");
-                System.Console.WriteLine(ex.ToString());
-                System.Console.WriteLine("==================================================");
-            }
-        }
-        else
-        {
-            System.Console.WriteLine("Database tables already exist in exam schema. Skipping creation.");
-        }
-    }
+    dbContext.Database.Migrate();
+    SeedDefaultData(dbContext);
 }
 
 app.UseSwagger();
@@ -83,3 +38,59 @@ app.MapControllers();
 app.MapGraphQL("/graphql");
 
 app.Run();
+
+static void SeedDefaultData(ExamAccountDbContext dbContext)
+{
+    if (dbContext.Students.Any())
+    {
+        return;
+    }
+
+    var admin = new StudentAccount
+    {
+        Id = Guid.NewGuid(),
+        UserName = "admin",
+        PasswordHash = AuthController.HashPassword("123456"),
+        StudentCode = "ADMIN",
+        FullName = "System Admin",
+        Email = "admin@local",
+        Role = UserRole.Admin,
+        IsActive = true
+    };
+
+    var lecturer = new StudentAccount
+    {
+        Id = Guid.NewGuid(),
+        UserName = "lecturer1",
+        PasswordHash = AuthController.HashPassword("123456"),
+        StudentCode = "LECT001",
+        FullName = "Lecturer One",
+        Email = "lecturer1@local",
+        Role = UserRole.Lecturer,
+        IsActive = true
+    };
+
+    var student = new StudentAccount
+    {
+        Id = Guid.NewGuid(),
+        UserName = "student1",
+        PasswordHash = AuthController.HashPassword("123456"),
+        StudentCode = "SE000001",
+        FullName = "Student One",
+        Email = "student1@local",
+        Role = UserRole.Student,
+        IsActive = true
+    };
+
+    dbContext.Students.AddRange(admin, lecturer, student);
+    dbContext.SaveChanges();
+
+    dbContext.ExamRooms.Add(new ExamRoom
+    {
+        Id = Guid.NewGuid(),
+        Code = "ROOM-1",
+        Name = "Default Room",
+        LecturerId = lecturer.Id
+    });
+    dbContext.SaveChanges();
+}

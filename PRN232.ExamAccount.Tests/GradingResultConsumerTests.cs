@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -30,21 +31,43 @@ public class GradingResultConsumerTests
     public async Task ProcessForTestAsync_UpdatesSubmissionAndSectionResults()
     {
         var databaseName = Guid.NewGuid().ToString();
+        var databaseRoot = new InMemoryDatabaseRoot();
         var examId = Guid.NewGuid();
+        var lecturerId = Guid.NewGuid();
+        var roomId = Guid.NewGuid();
         var studentId = Guid.NewGuid();
         var submissionId = Guid.NewGuid();
 
         var services = new ServiceCollection();
-        services.AddDbContext<ExamAccountDbContext>(options => options.UseInMemoryDatabase(databaseName));
+        services.AddDbContext<ExamAccountDbContext>(options => options.UseInMemoryDatabase(databaseName, databaseRoot));
         var provider = services.BuildServiceProvider();
 
         await using (var scope = provider.CreateAsyncScope())
         {
             var dbContext = scope.ServiceProvider.GetRequiredService<ExamAccountDbContext>();
 
+            dbContext.Students.Add(new StudentAccount
+            {
+                Id = lecturerId,
+                UserName = "lecturer",
+                PasswordHash = "hash",
+                StudentCode = "LECT001",
+                FullName = "Lecturer 1",
+                Role = UserRole.Lecturer
+            });
+
+            dbContext.ExamRooms.Add(new ExamRoom
+            {
+                Id = roomId,
+                Code = "R1",
+                Name = "Room 1",
+                LecturerId = lecturerId
+            });
+
             dbContext.Exams.Add(new Exam
             {
                 Id = examId,
+                RoomId = roomId,
                 Code = ExamCode,
                 Title = ExamTitle,
                 SolutionPattern = SolutionPattern
@@ -53,8 +76,11 @@ public class GradingResultConsumerTests
             dbContext.Students.Add(new StudentAccount
             {
                 Id = studentId,
+                UserName = "student",
+                PasswordHash = "hash",
                 StudentCode = StudentCode,
-                FullName = StudentName
+                FullName = StudentName,
+                Role = UserRole.Student
             });
 
             dbContext.Submissions.Add(new Submission
@@ -72,6 +98,7 @@ public class GradingResultConsumerTests
         var consumer = new TestableGradingResultConsumer(
             provider.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new RabbitMqOptions()),
+            new NotificationGrpcClient(Options.Create(new NotificationGrpcOptions()), NullLogger<NotificationGrpcClient>.Instance),
             NullLogger<GradingResultConsumer>.Instance);
 
         var rawReport = JsonSerializer.Serialize(new
@@ -92,6 +119,8 @@ public class GradingResultConsumerTests
         await consumer.ProcessForTestAsync(new SubmissionGradedEvent
         {
             SubmissionId = submissionId,
+            ExamId = examId,
+            StudentCode = StudentCode,
             TotalScore = TotalScore,
             RawJsonReport = rawReport
         });
@@ -112,8 +141,9 @@ public class GradingResultConsumerTests
         public TestableGradingResultConsumer(
             IServiceScopeFactory scopeFactory,
             IOptions<RabbitMqOptions> options,
+            NotificationGrpcClient notificationGrpcClient,
             Microsoft.Extensions.Logging.ILogger<GradingResultConsumer> logger)
-            : base(scopeFactory, options, logger)
+            : base(scopeFactory, options, notificationGrpcClient, logger)
         {
         }
 

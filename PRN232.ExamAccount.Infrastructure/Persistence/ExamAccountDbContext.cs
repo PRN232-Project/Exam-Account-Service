@@ -12,6 +12,8 @@ public class ExamAccountDbContext : DbContext
     public DbSet<Exam> Exams => Set<Exam>();
     public DbSet<ExamSectionDefinition> ExamSections => Set<ExamSectionDefinition>();
     public DbSet<StudentAccount> Students => Set<StudentAccount>();
+    public DbSet<ExamRoom> ExamRooms => Set<ExamRoom>();
+    public DbSet<NotificationRecord> Notifications => Set<NotificationRecord>();
     public DbSet<Submission> Submissions => Set<Submission>();
     public DbSet<SubmissionSectionResult> SubmissionSectionResults => Set<SubmissionSectionResult>();
 
@@ -27,6 +29,10 @@ public class ExamAccountDbContext : DbContext
             entity.Property(x => x.Title).HasMaxLength(256).IsRequired();
             entity.Property(x => x.SolutionPattern).HasMaxLength(256).IsRequired();
             entity.Property(x => x.PlagiarismKeywords).HasColumnType("text[]");
+            entity.HasOne(x => x.Room)
+                .WithMany(x => x.Exams)
+                .HasForeignKey(x => x.RoomId)
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasMany(x => x.Sections)
                 .WithOne(x => x.Exam)
                 .HasForeignKey(x => x.ExamId)
@@ -47,9 +53,23 @@ public class ExamAccountDbContext : DbContext
         modelBuilder.Entity<StudentAccount>(entity =>
         {
             entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserName).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.PasswordHash).HasMaxLength(256).IsRequired();
             entity.Property(x => x.StudentCode).HasMaxLength(64).IsRequired();
             entity.Property(x => x.FullName).HasMaxLength(256).IsRequired();
             entity.Property(x => x.Email).HasMaxLength(256);
+            entity.Property(x => x.Role).HasConversion<string>().HasMaxLength(32).IsRequired();
+        });
+
+        modelBuilder.Entity<ExamRoom>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Code).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            entity.HasOne(x => x.Lecturer)
+                .WithMany(x => x.ManagedRooms)
+                .HasForeignKey(x => x.LecturerId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Submission>(entity =>
@@ -57,6 +77,7 @@ public class ExamAccountDbContext : DbContext
             entity.HasKey(x => x.Id);
             entity.Property(x => x.WorkspacePath).HasMaxLength(1024).IsRequired();
             entity.Property(x => x.RawJsonReport);
+            entity.Property(x => x.ErrorMessage).HasMaxLength(2048);
             entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(64).IsRequired();
             entity.HasOne(x => x.StudentAccount)
                 .WithMany(x => x.Submissions)
@@ -65,6 +86,18 @@ public class ExamAccountDbContext : DbContext
             entity.HasMany(x => x.SectionResults)
                 .WithOne(x => x.Submission)
                 .HasForeignKey(x => x.SubmissionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NotificationRecord>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Type).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Title).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.Message).HasMaxLength(2048).IsRequired();
+            entity.HasOne(x => x.RecipientUser)
+                .WithMany(x => x.Notifications)
+                .HasForeignKey(x => x.RecipientUserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
