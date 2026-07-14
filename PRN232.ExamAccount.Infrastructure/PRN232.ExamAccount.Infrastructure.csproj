@@ -32,7 +32,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\Notification-Service\PRN232.Notification.Api\Protos\notification.proto" GrpcServices="Client" Link="Protos\notification.proto" />
+    <Protobuf Include="Protos\notification.proto" GrpcServices="Client" />
   </ItemGroup>
 
 </Project>
