@@ -21,7 +21,9 @@ public class ExamAccountDbContextFactory : IDesignTimeDbContextFactory<ExamAccou
             ?? throw new InvalidOperationException("Missing DefaultConnection for ExamAccountDbContextFactory.");
 
         var optionsBuilder = new DbContextOptionsBuilder<ExamAccountDbContext>();
-        optionsBuilder.UseNpgsql(connectionString);
+        optionsBuilder.UseNpgsql(
+            connectionString,
+            postgres => postgres.MigrationsHistoryTable("__EFMigrationsHistory", "exam"));
 
         return new ExamAccountDbContext(optionsBuilder.Options);
     }

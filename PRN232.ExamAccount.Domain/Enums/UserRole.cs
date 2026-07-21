@@ -2,7 +2,7 @@ namespace PRN232.ExamAccount.Domain.Enums;
 
 public enum UserRole
 {
-    Student = 1,
-    Lecturer = 2,
-    Admin = 3
+    Admin = 1,
+    ExamOfficer = 2,
+    Lecturer = 3
 }

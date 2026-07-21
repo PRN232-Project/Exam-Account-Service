@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PRN232.ExamAccount.Api.Security;
@@ -7,188 +8,47 @@ using PRN232.ExamAccount.Infrastructure.Persistence;
 
 namespace PRN232.ExamAccount.Api.Controllers;
 
-[ApiController]
-[Route("api/users")]
-public class UsersController : ControllerBase
+[ApiController, Route("api/users"), Authorize(Roles = nameof(UserRole.Admin))]
+public class UsersController(ExamAccountDbContext db) : ControllerBase
 {
-    private readonly ExamAccountDbContext _dbContext;
-
-    public UsersController(ExamAccountDbContext dbContext)
-    {
-        _dbContext = dbContext;
-    }
-
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<UserDto>>> GetUsersAsync([FromQuery] UserRole? role, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<UserDto>> GetAll(UserRole? role, CancellationToken ct)
     {
-        var auth = await this.RequireRolesAsync(_dbContext, UserRole.Admin);
-        if (auth.Error is not null) return auth.Error;
-
-        var query = _dbContext.Students.AsNoTracking().AsQueryable();
-        if (role.HasValue)
-        {
-            query = query.Where(x => x.Role == role.Value);
-        }
-
-        var users = await query.OrderBy(x => x.FullName).Select(x => new UserDto
-        {
-            Id = x.Id,
-            UserName = x.UserName,
-            StudentCode = x.StudentCode,
-            FullName = x.FullName,
-            Email = x.Email,
-            Role = x.Role.ToString(),
-            IsActive = x.IsActive
-        }).ToListAsync(cancellationToken);
-
-        return Ok(users);
-    }
-
-    [HttpGet("{userId:guid}")]
-    public async Task<ActionResult<UserDto>> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken)
-    {
-        var auth = await this.RequireRolesAsync(_dbContext, UserRole.Admin);
-        if (auth.Error is not null) return auth.Error;
-
-        var user = await _dbContext.Students.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId, cancellationToken);
-        return user is null ? NotFound() : Ok(MapUser(user));
+        var query = db.Users.AsNoTracking().AsQueryable();
+        if (role.HasValue) query = query.Where(x => x.Role == role);
+        return await query.OrderBy(x => x.FullName).Select(x => new UserDto(x.Id, x.UserName, x.FullName, x.Email, x.Role, x.IsActive)).ToListAsync(ct);
     }
 
     [HttpPost]
-    public async Task<ActionResult<UserDto>> CreateUserAsync([FromBody] UpsertUserRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<UserDto>> Create(UpsertUserRequest request, CancellationToken ct)
     {
-        var auth = await this.RequireRolesAsync(_dbContext, UserRole.Admin);
-        if (auth.Error is not null) return auth.Error;
-
-        var exists = await _dbContext.Students.AnyAsync(x => x.UserName == request.UserName, cancellationToken);
-        if (exists)
-        {
-            return BadRequest("UserName da ton tai.");
-        }
-
-        var user = new StudentAccount
-        {
-            Id = Guid.NewGuid(),
-            UserName = request.UserName.Trim(),
-            PasswordHash = AuthController.HashPassword(request.Password),
-            StudentCode = request.StudentCode.Trim(),
-            FullName = request.FullName.Trim(),
-            Email = request.Email.Trim(),
-            Role = request.Role,
-            IsActive = request.IsActive
-        };
-
-        _dbContext.Students.Add(user);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return Ok(MapUser(user));
+        if (await db.Users.AnyAsync(x => x.UserName == request.UserName.Trim(), ct)) return Conflict("UserName đã tồn tại.");
+        var user = new UserAccount { Id = Guid.NewGuid(), UserName = request.UserName.Trim(), PasswordHash = PasswordService.Hash(request.Password), FullName = request.FullName.Trim(), Email = request.Email.Trim(), Role = request.Role, IsActive = request.IsActive };
+        db.Users.Add(user); await db.SaveChangesAsync(ct);
+        return CreatedAtAction(nameof(GetAll), new { id = user.Id }, Map(user));
     }
 
-    [HttpPut("{userId:guid}")]
-    public async Task<ActionResult<UserDto>> UpdateUserAsync(Guid userId, [FromBody] UpsertUserRequest request, CancellationToken cancellationToken)
+    [HttpPut("{id:guid}")]
+    public async Task<ActionResult<UserDto>> Update(Guid id, UpsertUserRequest request, CancellationToken ct)
     {
-        var auth = await this.RequireRolesAsync(_dbContext, UserRole.Admin);
-        if (auth.Error is not null) return auth.Error;
-
-        var duplicateUserName = await _dbContext.Students.AnyAsync(
-            x => x.Id != userId && x.UserName == request.UserName,
-            cancellationToken);
-        if (duplicateUserName)
-        {
-            return BadRequest("UserName da ton tai.");
-        }
-
-        var user = await _dbContext.Students.FirstOrDefaultAsync(x => x.Id == userId, cancellationToken);
-        if (user is null)
-        {
-            return NotFound();
-        }
-
-        user.UserName = request.UserName.Trim();
-        user.StudentCode = request.StudentCode.Trim();
-        user.FullName = request.FullName.Trim();
-        user.Email = request.Email.Trim();
-        user.Role = request.Role;
-        user.IsActive = request.IsActive;
-        if (!string.IsNullOrWhiteSpace(request.Password))
-        {
-            user.PasswordHash = AuthController.HashPassword(request.Password);
-        }
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-        return Ok(MapUser(user));
+        var user = await db.Users.FindAsync([id], ct); if (user is null) return NotFound();
+        if (await db.Users.AnyAsync(x => x.Id != id && x.UserName == request.UserName.Trim(), ct)) return Conflict("UserName đã tồn tại.");
+        user.UserName = request.UserName.Trim(); user.FullName = request.FullName.Trim(); user.Email = request.Email.Trim(); user.Role = request.Role; user.IsActive = request.IsActive;
+        if (!string.IsNullOrWhiteSpace(request.Password)) user.PasswordHash = PasswordService.Hash(request.Password);
+        await db.SaveChangesAsync(ct); return Ok(Map(user));
     }
 
-    [HttpDelete("{userId:guid}")]
-    public async Task<IActionResult> DeleteUserAsync(Guid userId, CancellationToken cancellationToken)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var auth = await this.RequireRolesAsync(_dbContext, UserRole.Admin);
-        if (auth.Error is not null) return auth.Error;
-
-        var user = await _dbContext.Students
-            .Include(x => x.ManagedRooms)
-            .Include(x => x.Submissions)
-            .Include(x => x.Notifications)
-            .FirstOrDefaultAsync(x => x.Id == userId, cancellationToken);
-
-        if (user is null)
-        {
-            return NotFound();
-        }
-
-        if (user.ManagedRooms.Count > 0)
-        {
-            return BadRequest("Khong the xoa lecturer dang duoc gan cho room.");
-        }
-
-        if (user.Submissions.Count > 0)
-        {
-            return BadRequest("Khong the xoa user da co submission.");
-        }
-
-        if (user.Notifications.Count > 0)
-        {
-            _dbContext.Notifications.RemoveRange(user.Notifications);
-        }
-
-        _dbContext.Students.Remove(user);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-        return NoContent();
+        if (id == User.CurrentUserId()) return BadRequest("Không thể xoá tài khoản đang đăng nhập.");
+        var user = await db.Users.Include(x => x.AssignedBatches).FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (user is null) return NotFound();
+        if (user.AssignedBatches.Count > 0) return BadRequest("Tài khoản đã có lịch sử phân công; hãy khoá thay vì xoá.");
+        db.Users.Remove(user); await db.SaveChangesAsync(ct); return NoContent();
     }
-
-    private static UserDto MapUser(StudentAccount user)
-    {
-        return new UserDto
-        {
-            Id = user.Id,
-            UserName = user.UserName,
-            StudentCode = user.StudentCode,
-            FullName = user.FullName,
-            Email = user.Email,
-            Role = user.Role.ToString(),
-            IsActive = user.IsActive
-        };
-    }
+    private static UserDto Map(UserAccount x) => new(x.Id, x.UserName, x.FullName, x.Email, x.Role, x.IsActive);
 }
 
-public class UpsertUserRequest
-{
-    public string UserName { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
-    public string StudentCode { get; set; } = string.Empty;
-    public string FullName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public UserRole Role { get; set; } = UserRole.Student;
-    public bool IsActive { get; set; } = true;
-}
-
-public class UserDto
-{
-    public Guid Id { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string StudentCode { get; set; } = string.Empty;
-    public string FullName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string Role { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
-}
+public record UpsertUserRequest(string UserName, string Password, string FullName, string Email, UserRole Role, bool IsActive = true);
+public record UserDto(Guid Id, string UserName, string FullName, string Email, UserRole Role, bool IsActive);
