@@ -7,5 +7,7 @@ public class ExamSectionDefinition
     public string Name { get; set; } = string.Empty;
     public decimal Weight { get; set; }
     public string TestFilter { get; set; } = string.Empty;
+    public string TestCasesJson { get; set; } = "[]";
+    public string ApiProjectPath { get; set; } = string.Empty;
     public ExamPaper? ExamPaper { get; set; }
 }

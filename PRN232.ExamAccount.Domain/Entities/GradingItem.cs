@@ -12,6 +12,12 @@ public class GradingItem
     public int LatestAttemptNumber { get; set; }
     public string LastErrorCode { get; set; } = string.Empty;
     public string LastErrorMessage { get; set; } = string.Empty;
+    public string PlagiarismStatus { get; set; } = "Pending";
+    public int PlagiarismViolationCount { get; set; }
+    public decimal? PlagiarismMaxSimilarity { get; set; }
+    public string PlagiarismReportJson { get; set; } = "{}";
+    public string PlagiarismErrorMessage { get; set; } = string.Empty;
+    public DateTime? PlagiarismCheckedAtUtc { get; set; }
     public GradingBatch? GradingBatch { get; set; }
     public ExamCandidate? ExamCandidate { get; set; }
     public ICollection<GradingAttempt> Attempts { get; set; } = new List<GradingAttempt>();

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PRN232.ExamAccount.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using PRN232.ExamAccount.Infrastructure.Persistence;
 namespace PRN232.ExamAccount.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ExamAccountDbContext))]
-    partial class ExamAccountDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260722235258_AddEngineExecutionBridge")]
+    partial class AddEngineExecutionBridge
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -415,29 +418,6 @@ namespace PRN232.ExamAccount.Infrastructure.Persistence.Migrations
 
                     b.Property<decimal?>("LatestScore")
                         .HasColumnType("numeric");
-
-                    b.Property<DateTime?>("PlagiarismCheckedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("PlagiarismErrorMessage")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<decimal?>("PlagiarismMaxSimilarity")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("PlagiarismReportJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("PlagiarismStatus")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<int>("PlagiarismViolationCount")
-                        .HasColumnType("integer");
 
                     b.Property<string>("Status")
                         .IsRequired()

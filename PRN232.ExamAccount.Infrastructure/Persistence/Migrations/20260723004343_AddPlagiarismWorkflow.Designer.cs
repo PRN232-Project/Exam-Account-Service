@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PRN232.ExamAccount.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using PRN232.ExamAccount.Infrastructure.Persistence;
 namespace PRN232.ExamAccount.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ExamAccountDbContext))]
-    partial class ExamAccountDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260723004343_AddPlagiarismWorkflow")]
+    partial class AddPlagiarismWorkflow
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

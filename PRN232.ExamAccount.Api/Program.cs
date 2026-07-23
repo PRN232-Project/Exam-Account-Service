@@ -17,6 +17,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddSingleton<PRN232.ExamAccount.Api.Integration.RealtimeNotificationClient>();
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key is missing.");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
@@ -58,7 +59,7 @@ static async Task SeedAsync(ExamAccountDbContext db)
     if (paper is null)
     {
         paper = new ExamPaper { Id = Guid.NewGuid(), Code = "PRN223-DEMO", Title = "PRN223 Practical Demo", RubricVersion = "1.0", MaxScore = 10, SolutionPattern = "*.sln", TimeoutSeconds = 15 };
-        paper.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit" }); db.Add(paper);
+        paper.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit", TestCasesJson = "[]" }); db.Add(paper);
     }
     await db.SaveChangesAsync();
     var session = await db.ExamSessions.Include(x => x.Candidates).SingleOrDefaultAsync(x => x.Code == "PE-DEMO-2026");

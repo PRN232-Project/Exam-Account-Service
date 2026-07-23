@@ -5,11 +5,12 @@ using PRN232.ExamAccount.Api.Security;
 using PRN232.ExamAccount.Domain.Entities;
 using PRN232.ExamAccount.Domain.Enums;
 using PRN232.ExamAccount.Infrastructure.Persistence;
+using PRN232.ExamAccount.Api.Integration;
 
 namespace PRN232.ExamAccount.Api.Controllers;
 
 [ApiController, Route("api/grading-batches"), Authorize]
-public class GradingBatchesController(ExamAccountDbContext db) : ControllerBase
+public class GradingBatchesController(ExamAccountDbContext db, RealtimeNotificationClient realtime) : ControllerBase
 {
     [HttpGet]
     [Authorize(Roles = nameof(UserRole.ExamOfficer))]
@@ -30,8 +31,8 @@ public class GradingBatchesController(ExamAccountDbContext db) : ControllerBase
         if (x is null) return NotFound(); if (User.IsInRole(nameof(UserRole.Lecturer)) && x.LecturerId != User.CurrentUserId()) return Forbid();
         var paper = x.ExamSession!.ExamPaper!;
         return Ok(new BatchDetailDto(x.Id, x.Code, x.Status, x.ExamSessionId, x.ExamSession.Code, paper.Code, paper.RubricVersion, paper.MaxScore, paper.SolutionPattern, paper.RequireAppSettings, paper.ForbidHardcodedConnectionString, paper.TimeoutSeconds,
-            paper.Sections.Select(s => new ExamSectionDto(s.Id, s.Name, s.Weight, s.TestFilter)).ToList(),
-            x.Items.OrderBy(i => i.ExamCandidate!.Student!.StudentCode).Select(i => new GradingItemDto(i.Id, i.ExamCandidateId, i.ExamCandidate!.Student!.StudentCode, i.ExamCandidate.Student.FullName, i.ExamCandidate.PaperCode, i.Status, i.LatestScore, i.LatestAttemptNumber, i.LastErrorCode, i.LastErrorMessage, i.ReviewRequests.Where(r => !r.IsResolved).OrderByDescending(r => r.CreatedAtUtc).Select(r => r.Reason).FirstOrDefault())).ToList()));
+            paper.Sections.Select(s => new ExamSectionDto(s.Id, s.Name, s.Weight, s.TestFilter, s.TestCasesJson, s.ApiProjectPath)).ToList(),
+            x.Items.OrderBy(i => i.ExamCandidate!.Student!.StudentCode).Select(i => new GradingItemDto(i.Id, i.ExamCandidateId, i.ExamCandidate!.Student!.StudentCode, i.ExamCandidate.Student.FullName, i.ExamCandidate.PaperCode, i.Status, i.LatestScore, i.LatestAttemptNumber, i.LastErrorCode, i.LastErrorMessage, i.ReviewRequests.Where(r => !r.IsResolved).OrderByDescending(r => r.CreatedAtUtc).Select(r => r.Reason).FirstOrDefault(), i.PlagiarismStatus, i.PlagiarismViolationCount, i.PlagiarismMaxSimilarity, i.PlagiarismReportJson, i.PlagiarismErrorMessage, i.PlagiarismCheckedAtUtc)).ToList()));
     }
 
     [HttpPost]
@@ -46,7 +47,8 @@ public class GradingBatchesController(ExamAccountDbContext db) : ControllerBase
         var already = await db.GradingItems.Where(x => selected.Select(c => c.Id).Contains(x.ExamCandidateId)).Select(x => x.ExamCandidateId).ToListAsync(ct); if (already.Count > 0) return Conflict("Một hoặc nhiều candidate đã được phân công.");
         var batch = new GradingBatch { Id = Guid.NewGuid(), Code = r.Code.Trim(), ExamSessionId = session.Id, LecturerId = lecturer.Id, Status = GradingBatchStatus.Assigned };
         foreach (var candidate in selected) batch.Items.Add(new GradingItem { Id = Guid.NewGuid(), ExamCandidateId = candidate.Id, Status = GradingItemStatus.Assigned });
-        db.Add(batch); db.Notifications.Add(NewNotification(lecturer.Id, batch.Id, null, "BatchAssigned", "Có đợt chấm mới", $"Bạn được phân công đợt {batch.Code}.")); await db.SaveChangesAsync(ct);
+        db.Add(batch); var notification = NewNotification(lecturer.Id, batch.Id, null, "BatchAssigned", "Có đợt chấm mới", $"Bạn được phân công đợt {batch.Code}."); db.Notifications.Add(notification); await db.SaveChangesAsync(ct);
+        await realtime.SendAsync(notification, session.Id, session.RoomId, ct);
         return Created("api/grading-batches/" + batch.Id, new { batch.Id, batch.Code, batch.Status, itemCount = batch.Items.Count });
     }
 
@@ -69,7 +71,7 @@ public class GradingBatchesController(ExamAccountDbContext db) : ControllerBase
 }
 
 [ApiController, Route("api/grading-items"), Authorize]
-public class GradingItemsController(ExamAccountDbContext db) : ControllerBase
+public class GradingItemsController(ExamAccountDbContext db, RealtimeNotificationClient realtime) : ControllerBase
 {
     [HttpPost("{id:guid}/match")]
     [Authorize(Roles = nameof(UserRole.Lecturer))]
@@ -83,10 +85,11 @@ public class GradingItemsController(ExamAccountDbContext db) : ControllerBase
         var x = await OwnedItem(id, ct); if (x is null) return NotFound(); if (x.GradingBatch!.Status != GradingBatchStatus.InProgress) return BadRequest("Batch chưa ở InProgress.");
         var expectedVersion = x.GradingBatch.ExamSession!.ExamPaper!.RubricVersion; if (r.RubricVersion != expectedVersion) return BadRequest($"RubricVersion phải là {expectedVersion}.");
         var attempt = new GradingAttempt { Id = Guid.NewGuid(), GradingItemId = x.Id, AttemptNumber = x.LatestAttemptNumber + 1, ClientRequestId = r.ClientRequestId, TotalScore = r.TotalScore, RawJsonReport = r.RawJsonReport ?? "", HasTechnicalError = r.HasTechnicalError, ErrorCode = r.ErrorCode ?? "", ErrorMessage = r.ErrorMessage ?? "", RubricVersion = r.RubricVersion, CompletedAtUtc = r.CompletedAtUtc };
-        x.Attempts.Add(attempt); x.LatestAttemptNumber = attempt.AttemptNumber; x.LastErrorCode = attempt.ErrorCode; x.LastErrorMessage = attempt.ErrorMessage;
-        if (r.HasTechnicalError) { x.Status = GradingItemStatus.TechnicalError; db.Notifications.Add(GradingBatchesController.NewNotification(x.GradingBatch.LecturerId, x.GradingBatchId, x.Id, "GradingTechnicalError", "Bài chấm bị lỗi kỹ thuật", attempt.ErrorMessage)); }
+        db.GradingAttempts.Add(attempt); x.LatestAttemptNumber = attempt.AttemptNumber; x.LastErrorCode = attempt.ErrorCode; x.LastErrorMessage = attempt.ErrorMessage;
+        NotificationRecord? notification = null;
+        if (r.HasTechnicalError) { x.Status = GradingItemStatus.TechnicalError; notification = GradingBatchesController.NewNotification(x.GradingBatch.LecturerId, x.GradingBatchId, x.Id, "GradingTechnicalError", "Bài chấm bị lỗi kỹ thuật", attempt.ErrorMessage); db.Notifications.Add(notification); }
         else { if (r.TotalScore < 0 || r.TotalScore > x.GradingBatch.ExamSession.ExamPaper.MaxScore) return BadRequest("Điểm vượt phạm vi mã đề."); x.LatestScore = r.TotalScore; x.Status = GradingItemStatus.Graded; foreach (var review in x.ReviewRequests.Where(y => !y.IsResolved)) { review.IsResolved = true; review.ResolvedAtUtc = DateTime.UtcNow; } }
-        await db.SaveChangesAsync(ct); return Ok(new { attempt.Id, attempt.AttemptNumber, x.Status });
+        await db.SaveChangesAsync(ct); if (notification is not null) await realtime.SendAsync(notification, x.GradingBatch.ExamSessionId, x.GradingBatch.ExamSession!.RoomId, ct); return Ok(new { attempt.Id, attempt.AttemptNumber, x.Status });
     }
 
     [HttpPost("{id:guid}/retry")]
@@ -95,14 +98,14 @@ public class GradingItemsController(ExamAccountDbContext db) : ControllerBase
 
     [HttpPost("{id:guid}/return")]
     [Authorize(Roles = nameof(UserRole.ExamOfficer))]
-    public async Task<IActionResult> Return(Guid id, ReturnItemRequest r, CancellationToken ct) { if (string.IsNullOrWhiteSpace(r.Reason)) return BadRequest("Phải nhập lý do trả bài."); var x = await db.GradingItems.Include(i => i.GradingBatch).SingleOrDefaultAsync(i => i.Id == id, ct); if (x is null) return NotFound(); if (x.Status != GradingItemStatus.Submitted) return BadRequest("Chỉ trả item đã Submitted."); x.Status = GradingItemStatus.ReturnedForCorrection; x.GradingBatch!.Status = GradingBatchStatus.NeedsCorrection; db.ReviewRequests.Add(new ReviewRequest { Id = Guid.NewGuid(), GradingItemId = id, RequestedByUserId = User.CurrentUserId(), Reason = r.Reason.Trim() }); db.Notifications.Add(GradingBatchesController.NewNotification(x.GradingBatch.LecturerId, x.GradingBatchId, x.Id, "ResultReturned", "Kết quả bị trả lại", r.Reason.Trim())); await db.SaveChangesAsync(ct); return Ok(new { x.Id, x.Status, batchStatus = x.GradingBatch.Status }); }
+    public async Task<IActionResult> Return(Guid id, ReturnItemRequest r, CancellationToken ct) { if (string.IsNullOrWhiteSpace(r.Reason)) return BadRequest("Phải nhập lý do trả bài."); var x = await db.GradingItems.Include(i => i.GradingBatch!).ThenInclude(b => b.ExamSession).SingleOrDefaultAsync(i => i.Id == id, ct); if (x is null) return NotFound(); if (x.Status != GradingItemStatus.Submitted) return BadRequest("Chỉ trả item đã Submitted."); x.Status = GradingItemStatus.ReturnedForCorrection; x.GradingBatch!.Status = GradingBatchStatus.NeedsCorrection; db.ReviewRequests.Add(new ReviewRequest { Id = Guid.NewGuid(), GradingItemId = id, RequestedByUserId = User.CurrentUserId(), Reason = r.Reason.Trim() }); var notification = GradingBatchesController.NewNotification(x.GradingBatch.LecturerId, x.GradingBatchId, x.Id, "ResultReturned", "Kết quả bị trả lại", r.Reason.Trim()); db.Notifications.Add(notification); await db.SaveChangesAsync(ct); await realtime.SendAsync(notification, x.GradingBatch.ExamSessionId, x.GradingBatch.ExamSession!.RoomId, ct); return Ok(new { x.Id, x.Status, batchStatus = x.GradingBatch.Status }); }
 
     private async Task<GradingItem?> OwnedItem(Guid id, CancellationToken ct) { var userId = User.CurrentUserId(); return await db.GradingItems.Include(x => x.ReviewRequests).Include(x => x.Attempts).Include(x => x.GradingBatch).ThenInclude(x => x!.ExamSession).ThenInclude(x => x!.ExamPaper).SingleOrDefaultAsync(x => x.Id == id && x.GradingBatch!.LecturerId == userId, ct); }
 }
 
 public record CreateBatchRequest(string Code, Guid ExamSessionId, Guid LecturerId, IReadOnlyList<Guid> ExamCandidateIds);
 public record BatchListDto(Guid Id, string Code, GradingBatchStatus Status, Guid ExamSessionId, string ExamSessionCode, string ExamPaperCode, Guid LecturerId, string LecturerName, int ItemCount, int CompletedItemCount, DateTime AssignedAtUtc);
-public record GradingItemDto(Guid Id, Guid ExamCandidateId, string StudentCode, string StudentName, string PaperCode, GradingItemStatus Status, decimal? LatestScore, int LatestAttemptNumber, string LastErrorCode, string LastErrorMessage, string? ActiveReviewReason);
+public record GradingItemDto(Guid Id, Guid ExamCandidateId, string StudentCode, string StudentName, string PaperCode, GradingItemStatus Status, decimal? LatestScore, int LatestAttemptNumber, string LastErrorCode, string LastErrorMessage, string? ActiveReviewReason, string PlagiarismStatus, int PlagiarismViolationCount, decimal? PlagiarismMaxSimilarity, string PlagiarismReportJson, string PlagiarismErrorMessage, DateTime? PlagiarismCheckedAtUtc);
 public record BatchDetailDto(Guid Id, string Code, GradingBatchStatus Status, Guid ExamSessionId, string ExamSessionCode, string ExamPaperCode, string RubricVersion, decimal MaxScore, string SolutionPattern, bool RequireAppSettings, bool ForbidHardcodedConnectionString, int TimeoutSeconds, IReadOnlyList<ExamSectionDto> Sections, IReadOnlyList<GradingItemDto> Items);
 public record MatchItemRequest(bool Found, string? Note);
 public record CreateAttemptRequest(string ClientRequestId, decimal TotalScore, string? RawJsonReport, bool HasTechnicalError, string? ErrorCode, string? ErrorMessage, string RubricVersion, DateTime CompletedAtUtc);

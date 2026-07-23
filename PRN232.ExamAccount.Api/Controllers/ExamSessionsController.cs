@@ -39,7 +39,8 @@ public class ExamSessionsController(ExamAccountDbContext db) : ControllerBase
         var ids = r.StudentIds.Distinct().ToList(); var students = await db.Students.Where(x => ids.Contains(x.Id) && x.IsActive).Select(x => x.Id).ToListAsync(ct);
         if (students.Count != ids.Count) return BadRequest("Danh sách có sinh viên không tồn tại hoặc đã bị khoá.");
         var existing = session.Candidates.Select(x => x.StudentId).ToHashSet();
-        foreach (var studentId in students.Where(x => !existing.Contains(x))) session.Candidates.Add(new ExamCandidate { Id = Guid.NewGuid(), StudentId = studentId, ExamSessionId = id, PaperCode = session.ExamPaper!.Code });
+        foreach (var studentId in students.Where(x => !existing.Contains(x)))
+            db.ExamCandidates.Add(new ExamCandidate { Id = Guid.NewGuid(), StudentId = studentId, ExamSessionId = id, PaperCode = session.ExamPaper!.Code });
         await db.SaveChangesAsync(ct); return Ok(new { candidateCount = session.Candidates.Count });
     }
 

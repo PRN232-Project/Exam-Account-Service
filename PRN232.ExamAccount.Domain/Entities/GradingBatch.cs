@@ -15,4 +15,5 @@ public class GradingBatch
     public ExamSession? ExamSession { get; set; }
     public UserAccount? Lecturer { get; set; }
     public ICollection<GradingItem> Items { get; set; } = new List<GradingItem>();
+    public ICollection<BatchExecutionToken> ExecutionTokens { get; set; } = new List<BatchExecutionToken>();
 }

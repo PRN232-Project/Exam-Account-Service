@@ -19,6 +19,7 @@ public class ExamAccountDbContext(DbContextOptions<ExamAccountDbContext> options
     public DbSet<NotificationRecord> Notifications => Set<NotificationRecord>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<BatchExecutionToken> BatchExecutionTokens => Set<BatchExecutionToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -71,6 +72,8 @@ public class ExamAccountDbContext(DbContextOptions<ExamAccountDbContext> options
             entity.HasIndex(x => new { x.ExamPaperId, x.Name }).IsUnique();
             entity.Property(x => x.Name).HasMaxLength(128).IsRequired();
             entity.Property(x => x.TestFilter).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.TestCasesJson).HasColumnType("jsonb").IsRequired();
+            entity.Property(x => x.ApiProjectPath).HasMaxLength(512);
             entity.HasOne(x => x.ExamPaper).WithMany(x => x.Sections)
                 .HasForeignKey(x => x.ExamPaperId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -118,6 +121,9 @@ public class ExamAccountDbContext(DbContextOptions<ExamAccountDbContext> options
             entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(64).IsRequired();
             entity.Property(x => x.LastErrorCode).HasMaxLength(64);
             entity.Property(x => x.LastErrorMessage).HasMaxLength(2048);
+            entity.Property(x => x.PlagiarismStatus).HasMaxLength(32).IsRequired();
+            entity.Property(x => x.PlagiarismReportJson).HasColumnType("jsonb");
+            entity.Property(x => x.PlagiarismErrorMessage).HasMaxLength(2048);
             entity.HasOne(x => x.GradingBatch).WithMany(x => x.Items)
                 .HasForeignKey(x => x.GradingBatchId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.ExamCandidate).WithOne(x => x.GradingItem)
@@ -170,6 +176,15 @@ public class ExamAccountDbContext(DbContextOptions<ExamAccountDbContext> options
             entity.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
             entity.HasOne(x => x.UserAccount).WithMany()
                 .HasForeignKey(x => x.UserAccountId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BatchExecutionToken>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+            entity.HasOne(x => x.GradingBatch).WithMany(x => x.ExecutionTokens)
+                .HasForeignKey(x => x.GradingBatchId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
