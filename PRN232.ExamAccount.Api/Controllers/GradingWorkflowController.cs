@@ -35,6 +35,29 @@ public class GradingBatchesController(ExamAccountDbContext db, RealtimeNotificat
             x.Items.OrderBy(i => i.ExamCandidate!.Student!.StudentCode).Select(i => new GradingItemDto(i.Id, i.ExamCandidateId, i.ExamCandidate!.Student!.StudentCode, i.ExamCandidate.Student.FullName, i.ExamCandidate.PaperCode, i.Status, i.LatestScore, i.LatestAttemptNumber, i.LastErrorCode, i.LastErrorMessage, i.ReviewRequests.Where(r => !r.IsResolved).OrderByDescending(r => r.CreatedAtUtc).Select(r => r.Reason).FirstOrDefault(), i.PlagiarismStatus, i.PlagiarismViolationCount, i.PlagiarismMaxSimilarity, i.PlagiarismReportJson, i.PlagiarismErrorMessage, i.PlagiarismCheckedAtUtc)).ToList()));
     }
 
+    [HttpGet("{id:guid}/export-excel")]
+    [Authorize(Roles = $"{nameof(UserRole.Lecturer)},{nameof(UserRole.ExamOfficer)}")]
+    public async Task<IActionResult> ExportExcel(Guid id, CancellationToken ct)
+    {
+        var query = db.GradingBatches.AsNoTracking()
+            .Include(x => x.Lecturer)
+            .Include(x => x.ExamSession!).ThenInclude(x => x.ExamPaper)
+            .Include(x => x.Items).ThenInclude(x => x.ExamCandidate!).ThenInclude(x => x.Student)
+            .AsQueryable();
+        if (User.IsInRole(nameof(UserRole.Lecturer)))
+        {
+            var lecturerId = User.CurrentUserId();
+            query = query.Where(x => x.LecturerId == lecturerId);
+        }
+
+        var batch = await query.SingleOrDefaultAsync(x => x.Id == id, ct);
+        if (batch is null) return NotFound();
+
+        var fileName = $"bang-diem-{SanitizeFileName(batch.Code)}-{DateTime.UtcNow:yyyyMMddHHmmss}.xlsx";
+        var content = GradingBatchExcelExporter.Export(batch);
+        return File(content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+    }
+
     [HttpPost]
     [Authorize(Roles = nameof(UserRole.ExamOfficer))]
     public async Task<ActionResult<object>> Create(CreateBatchRequest r, CancellationToken ct)
@@ -68,6 +91,11 @@ public class GradingBatchesController(ExamAccountDbContext db, RealtimeNotificat
     private async Task<GradingBatch?> OwnedBatch(Guid id, CancellationToken ct, bool includeItems = false) { IQueryable<GradingBatch> q = db.GradingBatches.Include(x => x.ExamSession); if (includeItems) q = q.Include(x => x.Items); var userId = User.CurrentUserId(); return await q.SingleOrDefaultAsync(x => x.Id == id && x.LecturerId == userId, ct); }
     private static System.Linq.Expressions.Expression<Func<GradingBatch, BatchListDto>> MapList() => x => new BatchListDto(x.Id, x.Code, x.Status, x.ExamSessionId, x.ExamSession!.Code, x.ExamSession.ExamPaper!.Code, x.LecturerId, x.Lecturer!.FullName, x.Items.Count, x.Items.Count(i => i.Status == GradingItemStatus.Graded || i.Status == GradingItemStatus.Submitted || i.Status == GradingItemStatus.Accepted), x.AssignedAtUtc);
     internal static NotificationRecord NewNotification(Guid userId, Guid? batchId, Guid? itemId, string type, string title, string message) => new() { Id = Guid.NewGuid(), RecipientUserId = userId, GradingBatchId = batchId, GradingItemId = itemId, Type = type, Title = title, Message = message };
+    private static string SanitizeFileName(string value)
+    {
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        return string.Concat(value.Select(character => invalid.Contains(character) ? '-' : character));
+    }
 }
 
 [ApiController, Route("api/grading-items"), Authorize]
