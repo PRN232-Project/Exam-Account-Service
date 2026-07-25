@@ -128,6 +128,17 @@ public class GradingItemsController(ExamAccountDbContext db, RealtimeNotificatio
     [Authorize(Roles = nameof(UserRole.ExamOfficer))]
     public async Task<IActionResult> Return(Guid id, ReturnItemRequest r, CancellationToken ct) { if (string.IsNullOrWhiteSpace(r.Reason)) return BadRequest("Phải nhập lý do trả bài."); var x = await db.GradingItems.Include(i => i.GradingBatch!).ThenInclude(b => b.ExamSession).SingleOrDefaultAsync(i => i.Id == id, ct); if (x is null) return NotFound(); if (x.Status != GradingItemStatus.Submitted) return BadRequest("Chỉ trả item đã Submitted."); x.Status = GradingItemStatus.ReturnedForCorrection; x.GradingBatch!.Status = GradingBatchStatus.NeedsCorrection; db.ReviewRequests.Add(new ReviewRequest { Id = Guid.NewGuid(), GradingItemId = id, RequestedByUserId = User.CurrentUserId(), Reason = r.Reason.Trim() }); var notification = GradingBatchesController.NewNotification(x.GradingBatch.LecturerId, x.GradingBatchId, x.Id, "ResultReturned", "Kết quả bị trả lại", r.Reason.Trim()); db.Notifications.Add(notification); await db.SaveChangesAsync(ct); await realtime.SendAsync(notification, x.GradingBatch.ExamSessionId, x.GradingBatch.ExamSession!.RoomId, ct); return Ok(new { x.Id, x.Status, batchStatus = x.GradingBatch.Status }); }
 
+    [HttpGet("{id:guid}/report")]
+    [Authorize(Roles = $"{nameof(UserRole.Lecturer)},{nameof(UserRole.ExamOfficer)}")]
+    public async Task<IActionResult> GetReport(Guid id, CancellationToken ct)
+    {
+        var item = await db.GradingItems.Include(x => x.Attempts).SingleOrDefaultAsync(x => x.Id == id, ct);
+        if (item is null) return NotFound();
+        var latestAttempt = item.Attempts.OrderByDescending(x => x.AttemptNumber).FirstOrDefault();
+        if (latestAttempt is null) return NotFound("Chưa có report.");
+        return Ok(new { rawJsonReport = latestAttempt.RawJsonReport, plagiarismReportJson = item.PlagiarismReportJson });
+    }
+
     private async Task<GradingItem?> OwnedItem(Guid id, CancellationToken ct) { var userId = User.CurrentUserId(); return await db.GradingItems.Include(x => x.ReviewRequests).Include(x => x.Attempts).Include(x => x.GradingBatch).ThenInclude(x => x!.ExamSession).ThenInclude(x => x!.ExamPaper).SingleOrDefaultAsync(x => x.Id == id && x.GradingBatch!.LecturerId == userId, ct); }
 }
 
