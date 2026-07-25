@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -8,7 +9,7 @@ using PRN232.ExamAccount.Infrastructure.Persistence;
 namespace PRN232.ExamAccount.Api.Controllers;
 
 [ApiController, Route("api/exam-papers"), Authorize(Roles = nameof(UserRole.ExamOfficer))]
-public class ExamPapersController(ExamAccountDbContext db) : ControllerBase
+public class ExamPapersController(ExamAccountDbContext db, IHttpClientFactory? httpClientFactory = null, IConfiguration? configuration = null) : ControllerBase
 {
     [HttpGet]
     public Task<List<ExamPaperDto>> GetAll(CancellationToken ct) => db.ExamPapers.AsNoTracking().Include(x => x.Sections)
@@ -20,7 +21,9 @@ public class ExamPapersController(ExamAccountDbContext db) : ControllerBase
         if (await db.ExamPapers.AnyAsync(x => x.Code == r.Code.Trim(), ct)) return Conflict("Mã đề đã tồn tại.");
         var sectionError = ValidateSections(r.Sections); if (sectionError is not null) return BadRequest(sectionError);
         var x = new ExamPaper { Id = Guid.NewGuid() }; Apply(x, r); db.Add(x); AddSections(x, r.Sections);
-        await db.SaveChangesAsync(ct); return Created("api/exam-papers/" + x.Id, await Load(x.Id, ct));
+        await db.SaveChangesAsync(ct);
+        await SyncRubricToEngineAsync(r, ct);
+        return Created("api/exam-papers/" + x.Id, await Load(x.Id, ct));
     }
 
     [HttpPut("{id:guid}")]
@@ -29,7 +32,41 @@ public class ExamPapersController(ExamAccountDbContext db) : ControllerBase
         var x = await db.ExamPapers.Include(y => y.Sections).FirstOrDefaultAsync(y => y.Id == id, ct); if (x is null) return NotFound();
         if (await db.ExamPapers.AnyAsync(y => y.Id != id && y.Code == r.Code.Trim(), ct)) return Conflict("Mã đề đã tồn tại.");
         var sectionError = ValidateSections(r.Sections); if (sectionError is not null) return BadRequest(sectionError);
-        Apply(x, r); db.ExamSections.RemoveRange(x.Sections); AddSections(x, r.Sections); await db.SaveChangesAsync(ct); return Ok(await Load(id, ct));
+        Apply(x, r); db.ExamSections.RemoveRange(x.Sections); AddSections(x, r.Sections); await db.SaveChangesAsync(ct);
+        await SyncRubricToEngineAsync(r, ct);
+        return Ok(await Load(id, ct));
+    }
+
+    private async Task SyncRubricToEngineAsync(UpsertExamPaperRequest r, CancellationToken ct)
+    {
+        if (httpClientFactory is null) return;
+        try
+        {
+            var engineBaseUrl = configuration?["EngineService:BaseUrl"] ?? "http://localhost:5174";
+            var client = httpClientFactory.CreateClient(nameof(ExamPapersController));
+            client.BaseAddress = new Uri(engineBaseUrl.TrimEnd('/') + "/");
+
+            var requiredFiles = r.RequireAppSettings
+                ? new List<object> { new { pattern = "^appsettings(\\.Development)?\\.json$", mustExist = true } }
+                : new List<object>();
+
+            var rubricDto = new
+            {
+                examCode = r.Code.Trim(),
+                maxScore = r.MaxScore,
+                solutionPattern = r.SolutionPattern.Trim(),
+                forbidHardcodedConnectionString = r.ForbidHardcodedConnectionString,
+                deductionPointsPerNamingError = 1.0m,
+                requiredProjects = new List<object>(),
+                requiredFiles = requiredFiles
+            };
+
+            using var response = await client.PostAsJsonAsync("api/Grading/rubrics", rubricDto, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Warning] Sync rubric to Engine failed: {ex.Message}");
+        }
     }
 
     private Task<ExamPaperDto> Load(Guid id, CancellationToken ct) => db.ExamPapers.AsNoTracking().Include(x => x.Sections).Where(x => x.Id == id).Select(x => MapProjection(x)).SingleAsync(ct);

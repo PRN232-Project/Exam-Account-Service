@@ -12,6 +12,7 @@ using PRN232.ExamAccount.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers().AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddHttpClient();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddApplication();
@@ -60,21 +61,6 @@ static async Task SeedAsync(ExamAccountDbContext db)
     {
         paper = new ExamPaper { Id = Guid.NewGuid(), Code = "PRN223-DEMO", Title = "PRN223 Practical Demo", RubricVersion = "1.0", MaxScore = 10, SolutionPattern = "*.sln", TimeoutSeconds = 15 };
         paper.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit", TestCasesJson = "[]" }); db.Add(paper);
-    }
-    if (!await db.ExamPapers.AnyAsync(x => x.Code == "PRN232_DEFAULT"))
-    {
-        var p = new ExamPaper { Id = Guid.NewGuid(), Code = "PRN232_DEFAULT", Title = "PRN232 Default Practical Exam", RubricVersion = "1.0", MaxScore = 10, SolutionPattern = "^PRN232_{StudentID}$", RequireAppSettings = true, ForbidHardcodedConnectionString = true, TimeoutSeconds = 15 };
-        p.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit", TestCasesJson = "[]" }); db.Add(p);
-    }
-    if (!await db.ExamPapers.AnyAsync(x => x.Code == "PRN231_SU25"))
-    {
-        var p = new ExamPaper { Id = Guid.NewGuid(), Code = "PRN231_SU25", Title = "PRN231 Summer 2025 Exam", RubricVersion = "1.0", MaxScore = 10, SolutionPattern = "^PRN231_SU25_{StudentID}$", RequireAppSettings = true, ForbidHardcodedConnectionString = true, TimeoutSeconds = 15 };
-        p.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit", TestCasesJson = "[]" }); db.Add(p);
-    }
-    if (!await db.ExamPapers.AnyAsync(x => x.Code == "PRN232.LMS"))
-    {
-        var p = new ExamPaper { Id = Guid.NewGuid(), Code = "PRN232.LMS", Title = "PRN232 LMS Lab Exam", RubricVersion = "1.0", MaxScore = 10, SolutionPattern = "*.sln", RequireAppSettings = true, ForbidHardcodedConnectionString = true, TimeoutSeconds = 15 };
-        p.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), Name = "Unit Tests", Weight = 10, TestFilter = "FullyQualifiedName~Unit", TestCasesJson = "[]" }); db.Add(p);
     }
     await db.SaveChangesAsync();
     var session = await db.ExamSessions.Include(x => x.Candidates).SingleOrDefaultAsync(x => x.Code == "PE-DEMO-2026");
