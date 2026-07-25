@@ -29,7 +29,15 @@ public class ExamPapersController(ExamAccountDbContext db) : ControllerBase
         var x = await db.ExamPapers.Include(y => y.Sections).FirstOrDefaultAsync(y => y.Id == id, ct); if (x is null) return NotFound();
         if (await db.ExamPapers.AnyAsync(y => y.Id != id && y.Code == r.Code.Trim(), ct)) return Conflict("Mã đề đã tồn tại.");
         var sectionError = ValidateSections(r.Sections); if (sectionError is not null) return BadRequest(sectionError);
-        Apply(x, r); db.ExamSections.RemoveRange(x.Sections); AddSections(x, r.Sections); await db.SaveChangesAsync(ct); return Ok(await Load(id, ct));
+        Apply(x, r); 
+        db.ExamSections.RemoveRange(x.Sections); 
+        x.Sections.Clear();
+        foreach (var s in r.Sections) { 
+            var json = string.IsNullOrWhiteSpace(s.TestCasesJson) ? "[]" : s.TestCasesJson; 
+            db.ExamSections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), ExamPaperId = x.Id, Name = s.Name.Trim(), Weight = s.Weight, TestFilter = s.TestFilter.Trim(), TestCasesJson = json, ApiProjectPath = s.ApiProjectPath?.Trim() ?? "" }); 
+        }
+        await db.SaveChangesAsync(ct); 
+        return Ok(await Load(id, ct));
     }
 
     private Task<ExamPaperDto> Load(Guid id, CancellationToken ct) => db.ExamPapers.AsNoTracking().Include(x => x.Sections).Where(x => x.Id == id).Select(x => MapProjection(x)).SingleAsync(ct);
@@ -53,7 +61,7 @@ public class ExamPapersController(ExamAccountDbContext db) : ControllerBase
         }
         return null;
     }
-    private static void AddSections(ExamPaper x, IReadOnlyList<UpsertExamSectionRequest> sections) { foreach (var s in sections) { var json = string.IsNullOrWhiteSpace(s.TestCasesJson) ? "[]" : s.TestCasesJson; try { using var _ = System.Text.Json.JsonDocument.Parse(json); } catch (System.Text.Json.JsonException) { throw new ArgumentException($"TestCasesJson của section {s.Name} không phải JSON hợp lệ."); } x.Sections.Add(new ExamSectionDefinition { Id = Guid.NewGuid(), ExamPaperId = x.Id, Name = s.Name.Trim(), Weight = s.Weight, TestFilter = s.TestFilter.Trim(), TestCasesJson = json, ApiProjectPath = s.ApiProjectPath?.Trim() ?? "" }); } }
+    private static void AddSections(ExamPaper x, IReadOnlyList<UpsertExamSectionRequest> sections) { foreach (var s in sections) { var json = string.IsNullOrWhiteSpace(s.TestCasesJson) ? "[]" : s.TestCasesJson; try { using var _ = System.Text.Json.JsonDocument.Parse(json); } catch (System.Text.Json.JsonException) { throw new ArgumentException($"TestCasesJson của section {s.Name} không phải JSON hợp lệ."); } x.Sections.Add(new ExamSectionDefinition { ExamPaperId = x.Id, Name = s.Name.Trim(), Weight = s.Weight, TestFilter = s.TestFilter.Trim(), TestCasesJson = json, ApiProjectPath = s.ApiProjectPath?.Trim() ?? "" }); } }
 }
 public record UpsertExamSectionRequest(string Name, decimal Weight, string TestFilter, string TestCasesJson = "[]", string? ApiProjectPath = null);
 public record UpsertExamPaperRequest(string Code, string Title, string RubricVersion, decimal MaxScore, string SolutionPattern, bool RequireAppSettings, bool ForbidHardcodedConnectionString, int TimeoutSeconds, string[] PlagiarismKeywords, IReadOnlyList<UpsertExamSectionRequest> Sections, bool IsActive = true);
