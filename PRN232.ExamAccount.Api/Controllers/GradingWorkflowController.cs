@@ -139,6 +139,30 @@ public class GradingItemsController(ExamAccountDbContext db, RealtimeNotificatio
         return Ok(new { rawJsonReport = latestAttempt.RawJsonReport, plagiarismReportJson = item.PlagiarismReportJson });
     }
 
+    [HttpGet("plagiarism-cases")]
+    [Authorize(Roles = nameof(UserRole.ExamOfficer))]
+    public async Task<IActionResult> GetPlagiarismCases(CancellationToken ct)
+    {
+        var items = await db.GradingItems
+            .Include(x => x.ExamCandidate!).ThenInclude(c => c.Student)
+            .Include(x => x.GradingBatch!).ThenInclude(b => b.ExamSession)
+            .Where(x => x.PlagiarismViolationCount > 0 || x.PlagiarismMaxSimilarity > 0)
+            .OrderByDescending(x => x.PlagiarismCheckedAtUtc)
+            .Select(x => new 
+            {
+                x.Id,
+                StudentCode = x.ExamCandidate!.Student!.StudentCode,
+                StudentName = x.ExamCandidate!.Student!.FullName,
+                SessionCode = x.GradingBatch!.ExamSession!.Code,
+                x.PlagiarismViolationCount,
+                x.PlagiarismMaxSimilarity,
+                x.PlagiarismStatus,
+                x.PlagiarismCheckedAtUtc
+            })
+            .ToListAsync(ct);
+        return Ok(items);
+    }
+
     private async Task<GradingItem?> OwnedItem(Guid id, CancellationToken ct) { var userId = User.CurrentUserId(); return await db.GradingItems.Include(x => x.ReviewRequests).Include(x => x.Attempts).Include(x => x.GradingBatch).ThenInclude(x => x!.ExamSession).ThenInclude(x => x!.ExamPaper).SingleOrDefaultAsync(x => x.Id == id && x.GradingBatch!.LecturerId == userId, ct); }
 }
 
