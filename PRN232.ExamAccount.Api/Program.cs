@@ -9,8 +9,28 @@ using PRN232.ExamAccount.Domain.Entities;
 using PRN232.ExamAccount.Domain.Enums;
 using PRN232.ExamAccount.Infrastructure;
 using PRN232.ExamAccount.Infrastructure.Persistence;
+using PRN232.ExamAccount.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var isDocker = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true" 
+               || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DB_HOST"));
+
+var httpPort = isDocker ? 8080 : 5177;
+var grpcPort = isDocker ? 8081 : 5178;
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(httpPort, listenOptions =>
+    {
+        listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1;
+    });
+    options.ListenAnyIP(grpcPort, listenOptions =>
+    {
+        listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2;
+    });
+});
+
 builder.Services.AddControllers().AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddHttpClient();
 builder.Services.AddEndpointsApiExplorer();
@@ -19,6 +39,7 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddSingleton<PRN232.ExamAccount.Api.Integration.RealtimeNotificationClient>();
+builder.Services.AddGrpc();
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key is missing.");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
@@ -40,7 +61,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
     await SeedAsync(db);
 }
-app.UseSwagger(); app.UseSwaggerUI(); app.UseCors("Frontend"); app.UseHttpsRedirection(); app.UseAuthentication(); app.UseAuthorization(); app.MapControllers(); app.Run();
+app.UseSwagger(); app.UseSwaggerUI(); app.UseCors("Frontend"); app.UseHttpsRedirection(); app.UseAuthentication(); app.UseAuthorization(); app.MapControllers(); app.MapGrpcService<AuthGrpcEndpoint>(); app.Run();
 
 static async Task SeedAsync(ExamAccountDbContext db)
 {
